@@ -36,16 +36,26 @@ pip install -r requirements.txt
 BOT_TOKEN=your_bot_token
 CHAT_ID=your_chat_id
 
-# File Monitor Configuration
-BASE_URL=url_to_monitor
+# Monitor Token
+MONITOR_TOKEN=toekn_to_monitor
 
-# File Configuration (Optional)
+# File Configuration
 DOWNLOAD_DIR=downloaded_files
 LOG_DIR=logs
 
-# Check Intervals (Optional)
+# Check Intervals
 CHECK_INTERVAL=30    # File check interval (minutes)
 REPORT_INTERVAL=6   # Status report interval (hours)
+
+# File Index Range
+START_INDEX=0       # Start index for file checking
+END_INDEX=50       # End index for file checking
+
+# Supported File Extensions (comma-separated)
+SUPPORTED_EXTENSIONS=txt,zip  # json,pdf...
+
+# Thread Configuration
+MAX_WORKERS=5      # Maximum number of concurrent threads 
 ```
 
 ## Configuration Guide
