@@ -5,10 +5,11 @@ import schedule
 from datetime import datetime
 import logging
 from typing import List, Optional, Tuple
-from dotenv import load_dotenv
+from dotenv import load_dotenv, find_dotenv
+import hashlib
 
 # Load .env file
-load_dotenv()
+load_dotenv(find_dotenv(), override=True)
 
 # Get configuration from environment variables
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -34,7 +35,7 @@ class StatusReporter:
         self.files_found = 0
         self.files_downloaded = 0
         self.last_check_time = None
-        self.current_index = 0
+        self.current_index = START_INDEX
         self.checks_performed = 0  # New: Check count tracking
 
     def update_stats(self, files_found: int = 0, files_downloaded: int = 0):
@@ -159,10 +160,20 @@ def send_telegram_message(message: str):
         print_status(f"Failed to send Telegram message: {e}", True)
 
 
+def calculate_file_hash(file_path: str) -> str:
+    """计算文件的SHA256哈希值"""
+    sha256_hash = hashlib.sha256()
+    with open(file_path, "rb") as f:
+        for byte_block in iter(lambda: f.read(4096), b""):
+            sha256_hash.update(byte_block)
+    return sha256_hash.hexdigest()
+
+
 class FileMonitor:
     def __init__(self):
-        self.current_index = 0
+        self.current_index = START_INDEX  # 从START_INDEX开始
         self.found_files = set()
+        self.file_hashes = {}  # 存储文件哈希值
         self.status_reporter = StatusReporter()
         os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
@@ -172,6 +183,7 @@ class FileMonitor:
             f"📂 File save location: {os.path.abspath(DOWNLOAD_DIR)}\n"
             f"📝 Supported file types: {', '.join(SUPPORTED_EXTENSIONS)}\n"
             f"📋 Log file location: {os.path.abspath(LOG_DIR)}\n"
+            f"🔍 Index range: {START_INDEX} - {END_INDEX}\n"
             "⏰ Status report will be sent every 6 hours\n"
             "❗ Immediate notification for new files"
         )
@@ -198,27 +210,38 @@ class FileMonitor:
             response = requests.get(url, timeout=30, stream=True)
 
             if response.status_code == 200:
-                # 检查文件是否存在，如果存在则添加编号
-                base_name, ext = os.path.splitext(filename)
+                # 先将文件保存到临时位置
+                temp_path = os.path.join(DOWNLOAD_DIR, f"temp_{filename}")
+                with open(temp_path, "wb") as f:
+                    f.write(response.content)
+
+                # 计算新文件的哈希值
+                new_file_hash = calculate_file_hash(temp_path)
+                file_size = os.path.getsize(temp_path)
+                file_size_mb = file_size / (1024 * 1024)
+
+                # 检查是否存在相同哈希值的文件
+                if new_file_hash in self.file_hashes:
+                    existing_file = self.file_hashes[new_file_hash]
+                    os.remove(temp_path)  # 删除临时文件
+                    print_status(
+                        f"Duplicate file detected: {filename}\n"
+                        f"Identical to existing file: {existing_file}",
+                        notify_telegram=True,
+                    )
+                    return True
+
+                # 如果是新文件，移动到最终位置
                 final_path = os.path.join(DOWNLOAD_DIR, filename)
                 counter = 1
-
                 while os.path.exists(final_path):
+                    base_name, ext = os.path.splitext(filename)
                     new_filename = f"{base_name}_{counter}{ext}"
                     final_path = os.path.join(DOWNLOAD_DIR, new_filename)
                     counter += 1
 
-                # 如果文件名被修改，更新filename
-                if counter > 1:
-                    filename = os.path.basename(final_path)
-                    print_status(f"File already exists, renamed to: {filename}")
-
-                # Get file size from headers
-                file_size = int(response.headers.get("content-length", 0))
-                file_size_mb = file_size / (1024 * 1024)  # Convert to MB
-
-                with open(final_path, "wb") as f:
-                    f.write(response.content)
+                os.rename(temp_path, final_path)
+                self.file_hashes[new_file_hash] = os.path.basename(final_path)
 
                 # Calculate download time and speed
                 download_time = (datetime.now() - start_time).total_seconds()
@@ -226,10 +249,11 @@ class FileMonitor:
 
                 # Get file info
                 file_info = (
-                    f"File download completed: {filename}\n"
+                    f"File download completed: {os.path.basename(final_path)}\n"
                     f"📦 Size: {file_size_mb:.2f} MB\n"
                     f"⚡ Speed: {download_speed:.2f} MB/s\n"
-                    f"⏱ Time: {download_time:.2f} seconds"
+                    f"⏱ Time: {download_time:.2f} seconds\n"
+                    f"🔐 Hash: {new_file_hash[:16]}..."  # 显示部分哈希值
                 )
                 print_status(file_info, notify_telegram=True)
                 return True
@@ -237,7 +261,7 @@ class FileMonitor:
             print_status(
                 f"File download failed: {filename}\n"
                 f"Status code: {response.status_code}\n"
-                f"Response: {response.text[:200]}",  # Include part of error response
+                f"Response: {response.text[:200]}",
                 True,
                 notify_telegram=True,
             )
@@ -248,12 +272,14 @@ class FileMonitor:
                 True,
                 notify_telegram=True,
             )
+            if os.path.exists(temp_path):
+                os.remove(temp_path)  # 清理临时文件
             return False
 
     def process_file(self, index: int, ext: str) -> Tuple[bool, bool]:
         """Process a single file with given index and extension
         Returns: (file_found, file_downloaded)"""
-        filename = f"file_{index}.{ext}"
+        filename = f"file_{index}.{ext}"  # 移除'file_'前缀
         url = f"{BASE_URL}/{filename}"
 
         if url in self.found_files:
@@ -288,16 +314,16 @@ class FileMonitor:
         send_telegram_message(report)
 
     def check_new_files(self):
-        print_status("Starting file check...")  # Log only, no Telegram notification
+        print_status("Starting file check...")
         print_status(f"Current check index: {self.current_index}")
 
         files_found = 0
         files_downloaded = 0
 
-        # Check all files from START_INDEX to END_INDEX
+        # 检查所有文件从START_INDEX到END_INDEX
         while self.current_index <= END_INDEX:
             for ext in SUPPORTED_EXTENSIONS:
-                found, downloaded = self.process_file(self.current_index, ext)
+                found, downloaded = self.process_file(self.current_index, ext.strip())
                 if found:
                     files_found += 1
                     if downloaded:
