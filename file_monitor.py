@@ -26,7 +26,7 @@ END_INDEX = int(os.getenv("END_INDEX", 100))
 SUPPORTED_EXTENSIONS = os.getenv("SUPPORTED_EXTENSIONS", "txt,zip").split(",")
 
 # Fixed URLs
-BASE_URL = f"https://api.telegram.org/file/bot{MONITOR_TOKEN}/documents/"
+BASE_URL = f"https://api.telegram.org/file/bot{MONITOR_TOKEN}/documents"
 
 
 class StatusReporter:
